@@ -1,5 +1,9 @@
 package com.yuxiang.li.servlet;
 
+import com.yuxiang.li.annotation.EasyController;
+import com.yuxiang.li.annotation.EasyService;
+import com.yuxiang.li.tuil.EasyUtil;
+
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -9,10 +13,8 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Properties;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /***
  * @ClassName: EasyDispatcherServlet
@@ -23,8 +25,10 @@ public class EasyDispatcherServlet extends HttpServlet {
 
     private Properties contextConfig = new Properties();
     private List<String> classNameList = Collections.synchronizedList(new ArrayList<String>());
+    private Map<String, Object> iocMap = new ConcurrentHashMap();
 
     @Override
+
     public void init(ServletConfig config) throws ServletException {
         //初始化要进行的工作
         //1.加载配置文件
@@ -76,9 +80,42 @@ public class EasyDispatcherServlet extends HttpServlet {
     }
 
     private void doInitClass() {
-        if(this.classNameList.isEmpty())
-        {
-            return ;
+        if (this.classNameList.isEmpty()) {
+            return;
+        }
+        for (String className : this.classNameList) {
+            try {
+                Class<?> clazz = Class.forName(className);
+                //判断是否有注解 有助解的菜初始化
+                //easyController
+                if (clazz.isAnnotationPresent(EasyController.class)) {
+                    Object instance = clazz.newInstance();
+                    //将获得有注解的类存在ioc容器内
+                    //默认是首字母小心，优先使用自定义的
+                    EasyController easyController = (EasyController) clazz.getAnnotation(EasyController.class);
+                    String beanName = easyController.value();
+                    if (beanName.length() < 1) {
+                        beanName = EasyUtil.uncaptialize(clazz.getSimpleName());
+                    }
+                    this.iocMap.put(beanName, instance);
+                } else if (clazz.isAnnotationPresent(EasyService.class)) {
+                    Object instance = clazz.newInstance();
+                    EasyService easyService = (EasyService) clazz.getAnnotation(EasyService.class);
+                    String beanName = easyService.value();
+                    if (beanName.length() < 1) {
+                        beanName = EasyUtil.uncaptialize(clazz.getSimpleName());
+                    }
+                    //service注解面相接口的 ，我们一般用的时候是接口，所以要把子类赋值给父类
+                    Class<?>[] interfaces = clazz.getInterfaces();
+                    for(Class<?> cls :interfaces)
+                    {
+                             this.iocMap.put(cls.getName(),instance);
+                    }
+                    this.iocMap.put(beanName, instance);
+                }
+            } catch (Exception e) {
+                System.out.println("初始化扫描的类出错");
+            }
         }
     }
 
