@@ -1,6 +1,8 @@
 package com.yuxiang.li.servlet;
 
+import com.yuxiang.li.annotation.EasyAutowired;
 import com.yuxiang.li.annotation.EasyController;
+import com.yuxiang.li.annotation.EasyRequestMapping;
 import com.yuxiang.li.annotation.EasyService;
 import com.yuxiang.li.tuil.EasyUtil;
 
@@ -12,6 +14,8 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.URL;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -26,6 +30,8 @@ public class EasyDispatcherServlet extends HttpServlet {
     private Properties contextConfig = new Properties();
     private List<String> classNameList = Collections.synchronizedList(new ArrayList<String>());
     private Map<String, Object> iocMap = new ConcurrentHashMap();
+    private Map<String, Method> handlerMapping = new ConcurrentHashMap<String, Method>();
+    private Map<String, Object> controllerMapping = new ConcurrentHashMap<String, Object>();
 
     @Override
 
@@ -105,13 +111,12 @@ public class EasyDispatcherServlet extends HttpServlet {
                     if (beanName.length() < 1) {
                         beanName = EasyUtil.uncaptialize(clazz.getSimpleName());
                     }
+                    this.iocMap.put(beanName, instance);
                     //service注解面相接口的 ，我们一般用的时候是接口，所以要把子类赋值给父类
                     Class<?>[] interfaces = clazz.getInterfaces();
-                    for(Class<?> cls :interfaces)
-                    {
-                             this.iocMap.put(cls.getName(),instance);
+                    for (Class<?> cls : interfaces) {
+                        this.iocMap.put(cls.getName(), instance);
                     }
-                    this.iocMap.put(beanName, instance);
                 }
             } catch (Exception e) {
                 System.out.println("初始化扫描的类出错");
@@ -119,12 +124,62 @@ public class EasyDispatcherServlet extends HttpServlet {
         }
     }
 
-
     private void doAutowrid() {
+        if (this.iocMap.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, Object> entry : this.iocMap.entrySet()) {
+            Field[] fields = entry.getValue().getClass().getDeclaredFields();
+            for (Field field : fields) {
+                //有autowrid注解的 都要注入
+                if (!field.isAnnotationPresent(EasyAutowired.class)) {
+                    continue;
+                }
+                EasyAutowired easyAutowired = (EasyAutowired) field.getAnnotation(EasyAutowired.class);
+                String beanName = easyAutowired.value();
+                if (beanName.length() < 1) {
+                    beanName = EasyUtil.uncaptialize(field.getType().getSimpleName());
+                }
+                field.setAccessible(true);
+                try {
+                    field.set(entry.getValue(), this.iocMap.get(beanName));
+                } catch (IllegalAccessException e) {
+                    System.out.println("注入报错");
+                }
+            }
+        }
 
     }
 
     private void doInitHandlerMapping() {
+        if (this.iocMap.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, Object> entry : this.iocMap.entrySet()) {
+            Class<?> clazz = entry.getValue().getClass();
+            if (!clazz.isAnnotationPresent(EasyController.class)) {
+                continue;
+            }
+            String baseUrl = "";
+            if (clazz.isAnnotationPresent(EasyRequestMapping.class)) {
+                EasyRequestMapping easyRequestMapping = (EasyRequestMapping) clazz.getAnnotation(EasyRequestMapping.class);
+                baseUrl = easyRequestMapping.value();
+            }
+            Method[] methods = clazz.getMethods();
+            for (Method method : methods) {
+                if (method.isAnnotationPresent(EasyRequestMapping.class)) {
+                    EasyRequestMapping easyRequestMapping = (EasyRequestMapping) method.getAnnotation(EasyRequestMapping.class);
+                    String url = easyRequestMapping.value();
+                    url = baseUrl + url;
+                    this.handlerMapping.put(url, method);
+                    try {
+                        this.controllerMapping.put(url, clazz.newInstance());
+                    } catch (Exception e) {
+                        System.out.println("获得handlerMapping映射报错");
+                    }
+                }
+            }
+        }
 
     }
 
@@ -140,5 +195,49 @@ public class EasyDispatcherServlet extends HttpServlet {
 
     //接受请求
     private void doDispatcher(HttpServletRequest req, HttpServletResponse resp) {
+        String requestUrl = req.getRequestURI();
+        String contextPath = req.getContextPath();
+        requestUrl = requestUrl.replace(contextPath, "").replaceAll("/+", "/");
+        if (!this.handlerMapping.containsKey(requestUrl)) {
+            try {
+                resp.getWriter().write("404");
+            } catch (IOException e) {
+                System.out.println("404");
+            }
+        }
+        Method method = this.handlerMapping.get(requestUrl);
+        if (null == method) {
+            return;
+        }
+        Object instance = this.controllerMapping.get(requestUrl);
+        Class<?>[] parameterTypes = method.getParameterTypes();
+        Map<String, String[]> requestParamterMap = req.getParameterMap();
+        Object[] paramterValues = new Object[parameterTypes.length];
+        for (int i = 0; i < parameterTypes.length; i++) {
+            String requestName = parameterTypes[i].getSimpleName();
+            if (requestName.equals("HttpServletRequest")) {
+                paramterValues[i] = req;
+            }
+            if (requestName.equals("HttpServletResponse")) {
+                paramterValues[i] = resp;
+            }
+            if (requestName.equals("String")) {
+                for (Map.Entry<String, String[]> param : requestParamterMap.entrySet()) {
+                    String value = Arrays.toString(param.getValue()).replace("\\[|\\]", "").replace(",\\s", ",");
+                    paramterValues[i] = value;
+                }
+            }
+            //还有很多。。。。。参数类型
+        }
+        Field[] fields = instance.getClass().getDeclaredFields();
+        for (Field field : fields) {
+            field.setAccessible(true);
+            try {
+                field.set(instance, this.iocMap.get(field.getName()));
+                method.invoke(instance, paramterValues);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
     }
 }
