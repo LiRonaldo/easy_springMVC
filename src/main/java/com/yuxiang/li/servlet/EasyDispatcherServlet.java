@@ -34,11 +34,10 @@ public class EasyDispatcherServlet extends HttpServlet {
     private Map<String, Object> controllerMapping = new ConcurrentHashMap<String, Object>();
 
     @Override
-
     public void init(ServletConfig config) throws ServletException {
         //初始化要进行的工作
         //1.加载配置文件
-        doLoadConfig(config);
+        doLoadConfig(config.getInitParameter("contextConfigLocation"));
         //2.扫描包
         doScan(this.contextConfig.getProperty("scanPackage").toString());
         //3.初始化扫描进来的包
@@ -49,11 +48,11 @@ public class EasyDispatcherServlet extends HttpServlet {
         doInitHandlerMapping();
     }
 
-    private void doLoadConfig(ServletConfig config) {
+    private void doLoadConfig(String contextConfigLocation) {
         //此处mvc的配置文件采用
         InputStream is = null;
         try {
-            is = this.getClass().getResourceAsStream(config.getInitParameter(config.getInitParameter("contextConfigLocation")));
+            is = this.getClass().getClassLoader().getResourceAsStream(contextConfigLocation);
             if (is == null) {
                 System.out.println("没有找到文件");
                 return;
@@ -73,7 +72,7 @@ public class EasyDispatcherServlet extends HttpServlet {
     }
 
     private void doScan(String scanPath) {
-        URL url = this.getClass().getClassLoader().getResource("/" + scanPath.replace("\\.", "/"));
+        URL url = this.getClass().getClassLoader().getResource("/" + scanPath.replaceAll("\\.", "/"));
         File classFile = new File(url.getFile());
         for (File file : classFile.listFiles()) {
             if (file.isDirectory()) {
@@ -229,15 +228,16 @@ public class EasyDispatcherServlet extends HttpServlet {
             }
             //还有很多。。。。。参数类型
         }
-        Field[] fields = instance.getClass().getDeclaredFields();
-        for (Field field : fields) {
-            field.setAccessible(true);
-            try {
+        try {
+            Field[] fields = instance.getClass().getDeclaredFields();
+            for (Field field : fields) {
+                field.setAccessible(true);
                 field.set(instance, this.iocMap.get(field.getName()));
-                method.invoke(instance, paramterValues);
-            } catch (Exception e) {
-                e.printStackTrace();
             }
+            method.invoke(instance, paramterValues);
+        } catch (Exception e) {
+              System.out.println(" 反转方法报错");
         }
+
     }
 }
